@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ShopHub</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#f5f6fa;color:#222}
+  header{background:#1f2937;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+  header span{color:#cbd5e1;margin-right:12px}
+  main{display:grid;grid-template-columns:1fr 320px;gap:20px;padding:20px;max-width:1200px;margin:auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+  .card,.panel{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:8px 12px;cursor:pointer;margin:4px 4px 4px 0}
+  button:disabled{background:#9ca3af;cursor:not-allowed}
+  button.secondary{background:#6b7280}
+  input{padding:8px;border:1px solid #ccc;border-radius:6px;width:100%;box-sizing:border-box;margin:4px 0}
+  .muted{color:#666;font-size:.9em}
+  .msg{padding:8px 12px;border-radius:6px;margin:8px 0;display:none}
+  .ok{background:#d1fae5;display:block}
+  .err{background:#fee2e2;display:block}
+  .order{border-bottom:1px solid #eee;padding:8px 0}
+  @media (max-width:800px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <strong>ShopHub</strong>
+  <div><span id="who"></span><button id="logoutBtn" class="secondary" style="display:none" onclick="logout()">Logout</button></div>
+</header>
+
+<main>
+  <section>
+    <div id="notice" class="msg"></div>
+    <h2>Products</h2>
+    <div id="products" class="grid"></div>
+
+    <h2>My orders</h2>
+    <div id="orders" class="panel"><p class="muted">Login to see your orders.</p></div>
+  </section>
+
+  <aside>
+    <div id="authPanel" class="panel">
+      <h3>Sign in / Register</h3>
+      <input id="name" placeholder="Name (for registration)">
+      <input id="email" placeholder="Email">
+      <input id="password" type="password" placeholder="Password (6+ characters)">
+      <button onclick="register()">Register</button>
+      <button class="secondary" onclick="login()">Login</button>
+    </div>
+
+    <div id="cartPanel" class="panel" style="margin-top:20px">
+      <h3>Cart</h3>
+      <div id="cart"></div>
+      <p><strong>Total: $<span id="total">0.00</span></strong></p>
+      <button onclick="placeOrder()">Place order</button>
+      <button class="secondary" onclick="clearCart()">Clear</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+const API = '/api';
+let user = JSON.parse(localStorage.getItem('user') || 'null');
+let products = [];
+let cart = {};   // productId -> quantity
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function notify(text, ok = true) {
+  const n = $('notice');
+  n.textContent = text;
+  n.className = 'msg ' + (ok ? 'ok' : 'err');
+  setTimeout(() => n.className = 'msg', 4000);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function renderUser() {
+  $('who').textContent = user ? `Hi, ${user.name}` : '';
+  $('logoutBtn').style.display = user ? 'inline-block' : 'none';
+  $('authPanel').style.display = user ? 'none' : 'block';
+}
+
+function setUser(u) {
+  user = u;
+  localStorage.setItem('user', JSON.stringify(u));
+  renderUser();
+  loadOrders();
+}
+
+function logout() {
+  user = null;
+  localStorage.removeItem('user');
+  renderUser();
+  $('orders').innerHTML = '<p class="muted">Login to see your orders.</p>';
+}
+
+async function register() {
+  try {
+    const u = await api('/users', { method: 'POST', body: JSON.stringify({
+      name: $('name').value, email: $('email').value, password: $('password').value }) });
+    setUser(u);
+    notify('Account created');
+  } catch (e) { notify(e.message, false); }
+}
+
+async function login() {
+  try {
+    const u = await api('/users/login', { method: 'POST', body: JSON.stringify({
+      email: $('email').value, password: $('password').value }) });
+    setUser(u);
+    notify('Logged in');
+  } catch (e) { notify(e.message, false); }
+}
+
+async function loadProducts() {
+  products = await api('/products');
+  $('products').innerHTML = products.map(p => `
+    <div class="card">
+      <h3>${esc(p.name)}</h3>
+      <p class="muted">${esc(p.description || '')}</p>
+      <p><strong>$${Number(p.price).toFixed(2)}</strong>
+         <span class="muted">· ${p.stock} in stock</span></p>
+      <button onclick="addToCart(${p.id})" ${p.stock === 0 ? 'disabled' : ''}>Add to cart</button>
+    </div>`).join('');
+  renderCart();
+}
+
+function addToCart(id) {
+  const p = products.find(x => x.id === id);
+  const current = cart[id] || 0;
+  if (p && current >= p.stock) return notify('Not enough stock', false);
+  cart[id] = current + 1;
+  renderCart();
+}
+
+function removeOne(id) {
+  cart[id] -= 1;
+  if (cart[id] <= 0) delete cart[id];
+  renderCart();
+}
+
+function clearCart() { cart = {}; renderCart(); }
+
+function renderCart() {
+  const lines = Object.entries(cart)
+    .map(([id, q]) => ({ p: products.find(x => x.id === Number(id)), q }))
+    .filter(l => l.p);
+  $('cart').innerHTML = lines.length
+    ? lines.map(({ p, q }) => `<div>${esc(p.name)} × ${q}
+        <button class="secondary" onclick="removeOne(${p.id})">−</button></div>`).join('')
+    : '<p class="muted">Cart is empty</p>';
+  $('total').textContent = lines.reduce((s, { p, q }) => s + Number(p.price) * q, 0).toFixed(2);
+}
+
+async function placeOrder() {
+  if (!user) return notify('Please login first', false);
+  const items = Object.entries(cart).map(([productId, quantity]) => ({ productId: Number(productId), quantity }));
+  if (!items.length) return notify('Cart is empty', false);
+  try {
+    const o = await api('/orders', { method: 'POST', body: JSON.stringify({ userId: user.id, items }) });
+    cart = {};
+    notify(`Order #${o.orderId} placed. Total $${o.total}`);
+    await loadProducts();
+    await loadOrders();
+  } catch (e) { notify(e.message, false); }
+}
+
+async function loadOrders() {
+  if (!user) return;
+  const orders = await api(`/orders?userId=${user.id}`);
+  $('orders').innerHTML = orders.length
+    ? orders.map(o => `<div class="order"><strong>Order #${o.id}</strong>
+        <span class="muted">· ${esc(o.status)} · $${Number(o.total).toFixed(2)} · ${new Date(o.created_at).toLocaleString()}</span></div>`).join('')
+    : '<p class="muted">No orders yet.</p>';
+}
+
+renderUser();
+loadProducts().catch(e => notify('Could not load products: ' + e.message, false));
+loadOrders().catch(() => {});
+</script>
+</body>
+</html>
